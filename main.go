@@ -4,7 +4,9 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vsevicky/simplebank/api"
 	db "github.com/vsevicky/simplebank/db/sqlc"
@@ -27,8 +29,45 @@ func main() {
 	}
 
 	store := db.NewStore(conn)
+	go runGatewayServer(config, store)
 	runGrpcServer(config, store)
 
+}
+
+func runGatewayServer(
+	// ctx context.Context,
+	// waitGroup *errgroup.Group,
+	config util.Config,
+	store db.Store,
+	// taskDistributor worker.TaskDistributor,
+) {
+	server, err := gapi.NewServer(config, store)
+	if err != nil {
+		log.Fatal("cannot create server")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	grpcMux := runtime.NewServeMux()
+	err = pb.RegisterSimpleBankHandlerServer(ctx, grpcMux, server)
+	if err != nil {
+		log.Fatal("cannot register handler server")
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", grpcMux)
+	listener, err := net.Listen("tcp", config.HTTPServerAddress)
+	if err != nil {
+		log.Fatal("cannot create listener")
+	}
+
+	// waitGroup.Go(func() error {
+	log.Printf("start Htttp server at %s", listener.Addr().String())
+	err = http.Serve(listener, mux)
+	if err != nil {
+		log.Fatal("gRPC server failed to serve")
+	}
 }
 
 func runGrpcServer(
